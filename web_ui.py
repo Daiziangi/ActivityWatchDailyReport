@@ -13,8 +13,9 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, Tuple
+from datetime import datetime, timedelta
 
-from activity_daily_report import DEFAULT_CONFIG, deep_update, load_config
+from activity_daily_report import DEFAULT_CONFIG, deep_update, load_config, resolve_tz
 
 
 ROOT = Path(__file__).resolve().parent
@@ -954,6 +955,25 @@ def latest_report(config: Dict[str, Any]) -> Tuple[str, str]:
     return str(path), path.read_text(encoding="utf-8")
 
 
+def report_path_for_date(config: Dict[str, Any], report_date: str) -> Path:
+    tz = resolve_tz(str(config.get("timezone", "Asia/Shanghai")))
+    today = datetime.now(tz).date()
+    if report_date == "today":
+        day = today
+    elif report_date == "yesterday":
+        day = today - timedelta(days=1)
+    else:
+        day = datetime.fromisoformat(report_date).date()
+    return output_dir_from_config(config) / f"{day.isoformat()}.md"
+
+
+def report_for_date(config: Dict[str, Any], report_date: str) -> Tuple[str, str]:
+    path = report_path_for_date(config, report_date)
+    if not path.exists():
+        return str(path), ""
+    return str(path), path.read_text(encoding="utf-8")
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: Any) -> None:
         return
@@ -1031,7 +1051,10 @@ class Handler(BaseHTTPRequestHandler):
                 if code != 0:
                     json_response(self, 500, {"ok": False, "error": out})
                     return
-                path, content = latest_report(merged_config())
+                path, content = report_for_date(merged_config(), report_date)
+                if not content:
+                    json_response(self, 500, {"ok": False, "error": f"Report was generated but not found at {path}. Command output:\n{out}"})
+                    return
                 json_response(self, 200, {"ok": True, "message": out, "path": path, "content": content})
                 return
             if self.path == "/api/llm/test":
