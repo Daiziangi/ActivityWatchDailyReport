@@ -1,0 +1,72 @@
+{
+  "activitywatch_install_dir": "",
+  "api_base": "http://127.0.0.1:5600/api/0",
+  "timezone": "Asia/Shanghai",
+  "day_start_hour": 0,
+  "day_end_hour": 24,
+  "min_event_seconds": 1,
+  "top_n": 10,
+  "output_dir": "reports",
+  "category_rules": [
+    {
+      "category": "开发/创作",
+      "apps": ["Code.exe", "Cursor.exe", "Codex.exe", "pycharm64.exe", "idea64.exe", "WindowsTerminal.exe", "cmd.exe", "powershell.exe"],
+      "title_keywords": ["github", "stackoverflow", "文档", "docs"]
+    },
+    {
+      "category": "沟通",
+      "apps": ["Weixin.exe", "WXWork.exe", "DingTalk.exe", "Feishu.exe", "Teams.exe", "Telegram.exe", "QQ.exe"],
+      "title_keywords": ["微信", "消息"]
+    },
+    {
+      "category": "学习/阅读",
+      "apps": [],
+      "title_keywords": ["bilibili", "哔哩哔哩", "知乎", "课程", "论文", "教程", "GitHub"]
+    },
+    {
+      "category": "系统/文件",
+      "apps": ["explorer.exe", "ApplicationFrameHost.exe", "SystemSettings.exe"],
+      "title_keywords": ["设置", "文件资源管理器"]
+    }
+  ],
+  "focus_apps": ["Code.exe", "Cursor.exe", "Codex.exe", "pycharm64.exe", "idea64.exe", "WindowsTerminal.exe", "powershell.exe"],
+  "distracting_keywords": ["bilibili", "哔哩哔哩", "游戏", "直播", "短视频"],
+  "llm": {
+    "enabled": false,
+    "provider": "deepseek",
+    "history_days": 7,
+    "timeout_seconds": 60,
+    "max_output_tokens": 1200,
+    "temperature": 0.3,
+    "providers": {
+      "openai": {
+        "api_base": "https://api.openai.com/v1",
+        "model": "gpt-4.1-mini",
+        "api_key_env": "OPENAI_API_KEY"
+      },
+      "deepseek": {
+        "api_base": "https://api.deepseek.com/v1",
+        "model": "deepseek-chat",
+        "api_key_env": "DEEPSEEK_API_KEY"
+      },
+      "qwen": {
+        "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "model": "qwen-plus",
+        "api_key_env": "DASHSCOPE_API_KEY"
+      },
+      "ollama": {
+        "api_base": "http://127.0.0.1:11434/v1",
+        "model": "qwen2.5:7b",
+        "api_key_env": "OLLAMA_API_KEY",
+        "api_key": "ollama"
+      }
+    }
+  },
+  "schedule": {
+    "enabled": false,
+    "time": "23:55",
+    "report_date": "today",
+    "llm": "auto",
+    "provider": ""
+  }
+}
