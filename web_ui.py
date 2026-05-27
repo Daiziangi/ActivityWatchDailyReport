@@ -407,6 +407,7 @@ INDEX_HTML = r"""<!doctype html>
           <div><label>日报日期</label><select id="schedule_report_date"><option value="today">当天</option><option value="yesterday">昨天</option></select></div>
           <div><label>自动任务 LLM 模式</label><select id="schedule_llm"><option value="auto">跟随配置</option><option value="on">强制启用</option><option value="off">关闭</option></select></div>
           <div><label>自动任务 provider</label><select id="schedule_provider"></select></div>
+          <label class="toggle"><input id="schedule_silent" type="checkbox" />静默运行，不弹出执行窗口</label>
         </div>
         <div class="actions">
           <button class="success" id="saveAutomation">保存并应用任务</button>
@@ -429,6 +430,7 @@ INDEX_HTML = r"""<!doctype html>
           <button class="secondary" id="loadLatest">读取最新日报</button>
           <button class="secondary" id="openReports">查看历史日报</button>
         </div>
+        <div class="status" id="reportTarget">目标日期：未计算</div>
         <h3>预览</h3>
         <div class="report-preview" id="preview"><p class="muted">还没有生成或读取日报。</p></div>
       </section>
@@ -505,6 +507,8 @@ INDEX_HTML = r"""<!doctype html>
       $("schedule_report_date").value = schedule.report_date || "today";
       $("schedule_llm").value = schedule.llm || "auto";
       $("schedule_provider").value = schedule.provider || "";
+      $("schedule_silent").checked = schedule.silent !== false;
+      updateReportTarget();
 
       renderProviders();
     }
@@ -545,8 +549,29 @@ INDEX_HTML = r"""<!doctype html>
         time: $("schedule_time").value || "23:55",
         report_date: $("schedule_report_date").value,
         llm: $("schedule_llm").value,
-        provider: $("schedule_provider").value
+        provider: $("schedule_provider").value,
+        silent: $("schedule_silent").checked
       };
+    }
+
+    function formatLocalDate(date) {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, "0");
+      const d = String(date.getDate()).padStart(2, "0");
+      return `${y}-${m}-${d}`;
+    }
+
+    function resolveReportDateValue(value) {
+      const date = new Date();
+      if (value === "yesterday") date.setDate(date.getDate() - 1);
+      if (value === "today" || value === "yesterday") return formatLocalDate(date);
+      return value;
+    }
+
+    function updateReportTarget() {
+      if ($("reportTarget")) {
+        $("reportTarget").textContent = `目标日期：${resolveReportDateValue($("report_date").value)}`;
+      }
     }
 
     function renderProviders() {
@@ -693,6 +718,7 @@ INDEX_HTML = r"""<!doctype html>
     });
 
     $("reloadConfig").onclick = () => loadConfig().then(() => setMessage("已重新读取配置。")).catch(e => setMessage(e.message));
+    $("report_date").addEventListener("change", updateReportTarget);
     $("addProvider").onclick = async (e) => {
       setBusy(e.target, true);
       collectConfig();
@@ -774,13 +800,14 @@ INDEX_HTML = r"""<!doctype html>
       setBusy(e.target, true);
       try {
         await saveConfig();
+        const targetDate = resolveReportDateValue($("report_date").value);
         const data = await api("/api/report/generate", {method: "POST", body: JSON.stringify({
-          date: $("report_date").value,
+          date: targetDate,
           llm: $("report_llm").value,
           provider: $("report_provider").value
         })});
         showReport(data.content);
-        setMessage(`日报已生成：${data.path}`);
+        setMessage(`日报已生成：${data.path}（目标日期：${targetDate}）`);
       } catch (err) { setMessage(err.message); } finally { setBusy(e.target, false); }
     };
     $("loadLatest").onclick = async () => {
@@ -812,7 +839,7 @@ def merged_config() -> Dict[str, Any]:
         user_providers = user_config.get("llm", {}).get("providers")
         if isinstance(user_providers, dict):
             config.setdefault("llm", {})["providers"] = user_providers
-    config.setdefault("schedule", {"enabled": False, "time": "23:55", "report_date": "today", "llm": "auto", "provider": ""})
+    config.setdefault("schedule", {"enabled": False, "time": "23:55", "report_date": "today", "llm": "auto", "provider": "", "silent": True})
     return config
 
 
@@ -878,7 +905,15 @@ def schedule_status() -> str:
 def schedule_status_for_config(config: Dict[str, Any]) -> str:
     status = schedule_status()
     if config.get("schedule", {}).get("enabled") and "未安装" in status:
-        return status + "\n配置中已启用，但系统任务尚未安装。请点击“保存并应用任务”。"
+        status += "\n配置中已启用，但系统任务尚未安装。请点击“保存并应用任务”。"
+    latest_log = ROOT / "logs" / "latest.log"
+    if latest_log.exists():
+        try:
+            lines = latest_log.read_text(encoding="utf-8", errors="replace").splitlines()
+            tail = "\n".join(lines[-8:])
+            status += f"\n\n最近任务日志：\n{tail}"
+        except OSError:
+            pass
     return status
 
 
@@ -890,6 +925,7 @@ def apply_schedule(schedule: Dict[str, Any]) -> str:
     report_date = schedule.get("report_date") or "today"
     llm = schedule.get("llm") or "auto"
     provider = schedule.get("provider") or ""
+    silent = bool(schedule.get("silent", True))
     args = [
         "powershell",
         "-NoProfile",
@@ -906,6 +942,8 @@ def apply_schedule(schedule: Dict[str, Any]) -> str:
     ]
     if provider:
         args.extend(["-Provider", provider])
+    if silent:
+        args.append("-Silent")
     code, out = run_command(args)
     if code != 0:
         raise RuntimeError(out or "安装任务失败")

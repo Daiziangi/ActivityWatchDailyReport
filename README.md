@@ -153,7 +153,7 @@ $env:DEEPSEEK_API_KEY = "your-api-key"
 也可以直接使用脚本：
 
 ```powershell
-.\install_daily_task.ps1 -At 23:55 -ReportDate today
+.\install_daily_task.ps1 -At 23:55 -ReportDate today -Silent
 ```
 
 每天早上生成昨天的日报：
@@ -168,11 +168,22 @@ $env:DEEPSEEK_API_KEY = "your-api-key"
 .\install_daily_task.ps1 -At 23:55 -ReportDate today -Llm on -Provider deepseek
 ```
 
+如果不希望静默运行，可以去掉 `-Silent`。非静默模式会显示执行窗口，并在完成后短暂停留，方便确认是否生成成功。
+
 无副作用预览任务命令：
 
 ```powershell
-.\install_daily_task.ps1 -At 23:55 -ReportDate today -Llm auto -Provider deepseek -Preview
+.\install_daily_task.ps1 -At 23:55 -ReportDate today -Llm auto -Provider deepseek -Silent -Preview
 ```
+
+计划任务实际运行的是 `run_daily_report.ps1`，它会把每次执行日志写入：
+
+```text
+logs/latest.log
+logs/daily-report-YYYYMMDD-HHMMSS.log
+```
+
+如果任务窗口一闪而过但没有生成日报，请先查看 `logs/latest.log`。如果启用了 LLM 但模型调用失败，工具仍会生成基础日报，并在日报的“大模型增强分析”部分写明失败原因。
 
 ## 配置文件
 
@@ -218,6 +229,7 @@ ActivityWatch 数据包含应用名、窗口标题和网页标题，可能暴露
 ```text
 activity_report_config.json
 reports/
+logs/
 __pycache__/
 ```
 
@@ -235,6 +247,7 @@ __pycache__/
 - `activity_daily_report.py`：日报生成核心逻辑
 - `web_ui.py`：本地 Web 控制台
 - `install_daily_task.ps1`：Windows 计划任务安装脚本
+- `run_daily_report.ps1`：计划任务运行 wrapper，负责写日志和调用日报脚本
 - `start_web_ui.bat`：Windows 一键启动器
 - `start_web_ui.ps1`：PowerShell 启动器
 - `activity_report_config.example.json`：示例配置

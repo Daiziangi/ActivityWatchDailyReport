@@ -629,7 +629,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     output_dir = Path(str(config["output_dir"]))
     llm_summary = None
     if should_use_llm(config, args.llm):
-        llm_summary = make_llm_summary(report_day, stats, config, output_dir, args.provider)
+        try:
+            llm_summary = make_llm_summary(report_day, stats, config, output_dir, args.provider)
+        except BaseException as exc:
+            llm_summary = (
+                "LLM 增强分析生成失败，已保留基础统计日报。\n\n"
+                f"错误信息：`{escape_md(type(exc).__name__ + ': ' + str(exc))}`"
+            )
 
     report = render_report(report_day, start, end, {"window": window_bucket, "afk": afk_bucket}, stats, config, llm_summary)
     report_path = write_report(report, output_dir, report_day)

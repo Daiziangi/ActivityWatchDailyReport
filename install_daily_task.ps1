@@ -6,27 +6,43 @@ param(
     [ValidateSet("auto", "on", "off")]
     [string]$Llm = "auto",
     [string]$Provider = "",
+    [switch]$Silent,
     [switch]$Preview
 )
 
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Script = Join-Path $Root "activity_daily_report.py"
+$Script = Join-Path $Root "run_daily_report.ps1"
 
 if (-not (Test-Path $Script)) {
     throw "Cannot find $Script"
 }
 
-$Python = (Get-Command python -ErrorAction Stop).Source
-$ReportArgs = @("`"$Script`"", "--date", $ReportDate, "--llm", $Llm)
+$PowerShell = (Get-Command powershell -ErrorAction Stop).Source
+$ReportArgs = @(
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy", "Bypass",
+    "-File", "`"$Script`"",
+    "-ReportDate", $ReportDate,
+    "-Llm", $Llm,
+    "-SaveJson"
+)
 if ($Provider) {
-    $ReportArgs += @("--provider", $Provider)
+    $ReportArgs += @("-Provider", $Provider)
+}
+if ($Silent) {
+    $ReportArgs = @("-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass") + $ReportArgs[4..($ReportArgs.Count - 1)]
+    $ReportArgs += "-Silent"
+}
+else {
+    $ReportArgs += "-Notify"
 }
 $ReportArgument = $ReportArgs -join " "
 
 if ($Preview) {
-    Write-Host "Execute: $Python"
+    Write-Host "Execute: $PowerShell"
     Write-Host "Arguments: $ReportArgument"
     Write-Host "WorkingDirectory: $Root"
     Write-Host "Trigger: Daily at $At"
@@ -34,7 +50,7 @@ if ($Preview) {
 }
 
 $Action = New-ScheduledTaskAction `
-    -Execute $Python `
+    -Execute $PowerShell `
     -Argument $ReportArgument `
     -WorkingDirectory $Root
 $Trigger = New-ScheduledTaskTrigger -Daily -At $At
