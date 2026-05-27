@@ -266,11 +266,11 @@ def build_stats(window_events: List[Event], afk_events: List[Event], config: Dic
     focus_seconds = 0.0
     distraction_seconds = 0.0
     raw_window_seconds = sum(event.duration for event in window_events)
-    afk_intervals = [
+    afk_intervals = merge_intervals([
         (event.start, event.end)
         for event in afk_events
         if str(event.data.get("status", "")).lower() == "afk"
-    ]
+    ])
     active_window_events = subtract_intervals(window_events, afk_intervals)
 
     focus_apps = {item.lower() for item in config.get("focus_apps", [])}
@@ -289,14 +289,7 @@ def build_stats(window_events: List[Event], afk_events: List[Event], config: Dic
         if any(keyword in title.lower() for keyword in distracting_keywords):
             distraction_seconds += event.duration
 
-    afk_seconds = 0.0
-    not_afk_seconds = 0.0
-    for event in afk_events:
-        status = str(event.data.get("status", "")).lower()
-        if status == "afk":
-            afk_seconds += event.duration
-        elif status == "not-afk":
-            not_afk_seconds += event.duration
+    afk_seconds = sum((end - start).total_seconds() for start, end in afk_intervals)
 
     active_seconds = sum(app_seconds.values())
 
@@ -313,10 +306,24 @@ def build_stats(window_events: List[Event], afk_events: List[Event], config: Dic
     }
 
 
+def merge_intervals(intervals: List[Tuple[datetime, datetime]]) -> List[Tuple[datetime, datetime]]:
+    normalized = sorted((start, end) for start, end in intervals if end > start)
+    if not normalized:
+        return []
+    merged = [normalized[0]]
+    for start, end in normalized[1:]:
+        last_start, last_end = merged[-1]
+        if start <= last_end:
+            merged[-1] = (last_start, max(last_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
 def subtract_intervals(events: List[Event], blocked: List[Tuple[datetime, datetime]]) -> List[Event]:
     if not blocked:
         return list(events)
-    blocked = sorted(blocked)
+    blocked = merge_intervals(blocked)
     result = []
     for event in events:
         fragments = [(event.start, event.end)]
