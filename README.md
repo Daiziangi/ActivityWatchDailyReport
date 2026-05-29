@@ -170,6 +170,8 @@ $env:DEEPSEEK_API_KEY = "your-api-key"
 
 如果不希望静默运行，可以去掉 `-Silent`。非静默模式会显示执行窗口，并在完成后短暂停留，方便确认是否生成成功。
 
+静默模式使用 `wscript.exe` 调用 `run_daily_report_silent.vbs`，再由它以隐藏窗口方式运行 PowerShell。这样比直接使用 `powershell -WindowStyle Hidden` 更不容易抢占焦点。修改静默开关后，需要在 Web 控制台点击“保存并应用任务”，或重新运行 `install_daily_task.ps1`，让 Windows 任务计划更新到新的动作。
+
 无副作用预览任务命令：
 
 ```powershell
@@ -248,6 +250,7 @@ __pycache__/
 - `web_ui.py`：本地 Web 控制台
 - `install_daily_task.ps1`：Windows 计划任务安装脚本
 - `run_daily_report.ps1`：计划任务运行 wrapper，负责写日志和调用日报脚本
+- `run_daily_report_silent.vbs`：静默任务启动器，用于避免弹出 PowerShell 控制台窗口
 - `start_web_ui.bat`：Windows 一键启动器
 - `start_web_ui.ps1`：PowerShell 启动器
 - `activity_report_config.example.json`：示例配置
