@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, Tuple
 from datetime import datetime, timedelta
 
-from activity_daily_report import DEFAULT_CONFIG, deep_update, load_config, resolve_tz
+from activity_daily_report import DEFAULT_CONFIG, chat_completions_url, deep_update, load_config, resolve_tz
 
 
 ROOT = Path(__file__).resolve().parent
@@ -222,12 +222,14 @@ INDEX_HTML = r"""<!doctype html>
     }
     .provider-row {
       display: grid;
-      grid-template-columns: 150px 1fr 1fr 1fr 92px;
+      grid-template-columns: 140px minmax(180px, 1fr) minmax(160px, 1fr) minmax(180px, 1fr) 90px 92px;
       gap: 10px;
       padding: 10px 0;
       border-top: 1px solid var(--line);
       align-items: end;
     }
+    .wide { grid-column: 1 / -1; }
+    .provider-row textarea { min-height: 74px; }
     .provider-row:first-of-type { border-top: 0; }
     .report-preview {
       height: 520px;
@@ -380,14 +382,25 @@ INDEX_HTML = r"""<!doctype html>
           <div><label>最大输出 tokens</label><input id="llm_max_output_tokens" type="number" min="100" step="100" /></div>
           <div><label>请求超时秒数</label><input id="llm_timeout_seconds" type="number" min="5" step="5" /></div>
         </div>
+        <h3>日报生成偏好</h3>
+        <div class="status">这些内容会随当天结构化数据一起发送给 LLM。基础统计仍由本地脚本计算，LLM 只能增强分析和表达。</div>
+        <div class="grid" style="margin-top:12px">
+          <div><label>写作风格</label><input id="llm_profile_style" placeholder="例如：简洁、具体、偏行动建议" /></div>
+          <div><label>期望结构</label><input id="llm_profile_structure" placeholder="例如：总览、关键观察、时间分布、风险、建议" /></div>
+          <div><label>分析重点</label><textarea id="llm_profile_focus" placeholder="例如：深度工作、分心内容、上下文切换、历史变化"></textarea></div>
+          <div><label>必须出现的信息</label><textarea id="llm_profile_must_include" placeholder="例如：活跃时长、空闲时长、Top 应用/类别、异常、建议"></textarea></div>
+          <div><label>精确性规则</label><textarea id="llm_profile_precision_rules" placeholder="例如：所有数字必须来自 today 数据，不确定就说明不确定"></textarea></div>
+          <div><label>自定义要求</label><textarea id="llm_profile_custom_instructions" placeholder="例如：重点分析凌晨后的使用；建议按优先级排序"></textarea></div>
+        </div>
         <h3>Provider 列表</h3>
         <div class="status">API Key 可以填环境变量名，也可以直接填 api_key。直接保存 key 会写入本地配置文件。一个 provider 对应一个默认模型；如果同一家服务要用多个模型，可以新增多个 provider 别名。</div>
         <div class="grid-3" style="margin-top:12px">
           <div><label>新增 provider 名称</label><input id="new_provider_name" placeholder="例如 siliconflow" /></div>
-          <div><label>API Base</label><input id="new_provider_base" placeholder="https://api.example.com/v1" /></div>
+          <div><label>API Base</label><input id="new_provider_base" placeholder="https://api.example.com 或 https://api.example.com/v1" /></div>
           <div><label>模型</label><input id="new_provider_model" placeholder="model-name" /></div>
           <div><label>API Key 环境变量</label><input id="new_provider_key_env" placeholder="SILICONFLOW_API_KEY" /></div>
           <div><label>直接 API Key，可留空</label><input id="new_provider_key" placeholder="sk-..." /></div>
+          <label class="toggle"><input id="new_provider_stream" type="checkbox" />启用流式响应</label>
         </div>
         <div class="actions">
           <button class="secondary" id="addProvider">添加并保存 provider</button>
@@ -500,6 +513,13 @@ INDEX_HTML = r"""<!doctype html>
       $("llm_temperature").value = config.llm?.temperature ?? 0.3;
       $("llm_max_output_tokens").value = config.llm?.max_output_tokens ?? 1200;
       $("llm_timeout_seconds").value = config.llm?.timeout_seconds ?? 60;
+      const profile = config.llm?.report_profile || {};
+      $("llm_profile_style").value = profile.style || "";
+      $("llm_profile_structure").value = profile.structure || "";
+      $("llm_profile_focus").value = profile.focus || "";
+      $("llm_profile_must_include").value = profile.must_include || "";
+      $("llm_profile_precision_rules").value = profile.precision_rules || "";
+      $("llm_profile_custom_instructions").value = profile.custom_instructions || "";
 
       const schedule = config.schedule || {};
       $("schedule_enabled").checked = !!schedule.enabled;
@@ -542,6 +562,14 @@ INDEX_HTML = r"""<!doctype html>
       config.llm.temperature = Number($("llm_temperature").value);
       config.llm.max_output_tokens = Number($("llm_max_output_tokens").value);
       config.llm.timeout_seconds = Number($("llm_timeout_seconds").value);
+      config.llm.report_profile = {
+        style: $("llm_profile_style").value.trim(),
+        structure: $("llm_profile_structure").value.trim(),
+        focus: $("llm_profile_focus").value.trim(),
+        must_include: $("llm_profile_must_include").value.trim(),
+        precision_rules: $("llm_profile_precision_rules").value.trim(),
+        custom_instructions: $("llm_profile_custom_instructions").value.trim()
+      };
       collectProviders();
 
       config.schedule = {
@@ -587,7 +615,9 @@ INDEX_HTML = r"""<!doctype html>
           <div><label>API Base</label><input data-field="api_base" value="${escapeHtml(p.api_base || "")}" /></div>
           <div><label>模型</label><input data-field="model" value="${escapeHtml(p.model || "")}" /></div>
           <div><label>Key 环境变量 / 直接 Key</label><input data-field="api_key_env" value="${escapeHtml(p.api_key_env || "")}" placeholder="环境变量名" /><input data-field="api_key" value="${escapeHtml(p.api_key || "")}" placeholder="直接 API Key，可留空" style="margin-top:6px" /></div>
+          <label class="toggle"><input data-field="stream" type="checkbox" ${p.stream ? "checked" : ""} />流式</label>
           <div><button class="danger provider-delete" data-name="${escapeHtml(name)}" type="button">删除</button></div>
+          <div class="wide"><label>额外请求参数 extra_body（JSON 对象，可选）</label><textarea data-field="extra_body" placeholder='例如 {"enable_thinking": false}'>${escapeHtml(formatExtraBody(p.extra_body))}</textarea></div>
         `;
         wrap.appendChild(row);
       });
@@ -610,15 +640,33 @@ INDEX_HTML = r"""<!doctype html>
       document.querySelectorAll(".provider-row").forEach(row => {
         const name = row.dataset.provider;
         const get = (field) => row.querySelector(`[data-field="${field}"]`).value.trim();
+        const checked = (field) => row.querySelector(`[data-field="${field}"]`).checked;
         config.llm.providers[name] = {
           api_base: get("api_base"),
           model: get("model"),
-          api_key_env: get("api_key_env")
+          api_key_env: get("api_key_env"),
+          stream: checked("stream")
         };
         const key = get("api_key");
         if (key) config.llm.providers[name].api_key = key;
         else delete config.llm.providers[name].api_key;
+        const extra = get("extra_body");
+        if (extra) {
+          try {
+            config.llm.providers[name].extra_body = JSON.parse(extra);
+          } catch (_) {
+            config.llm.providers[name].extra_body = extra;
+          }
+        } else {
+          config.llm.providers[name].extra_body = {};
+        }
       });
+    }
+
+    function formatExtraBody(value) {
+      if (!value) return "";
+      if (typeof value === "string") return value;
+      try { return JSON.stringify(value); } catch (_) { return ""; }
     }
 
     function escapeHtml(value) {
@@ -738,7 +786,9 @@ INDEX_HTML = r"""<!doctype html>
         const provider = {
           api_base: $("new_provider_base").value.trim(),
           model: $("new_provider_model").value.trim(),
-          api_key_env: keyEnv
+          api_key_env: keyEnv,
+          stream: $("new_provider_stream").checked,
+          extra_body: {}
         };
         const directKey = $("new_provider_key").value.trim();
         if (directKey) provider.api_key = directKey;
@@ -753,6 +803,7 @@ INDEX_HTML = r"""<!doctype html>
         $("new_provider_model").value = "";
         $("new_provider_key_env").value = "";
         $("new_provider_key").value = "";
+        $("new_provider_stream").checked = false;
         renderProviders();
         refreshProviderControls();
         $("llm_provider").value = name;
@@ -1101,6 +1152,7 @@ class Handler(BaseHTTPRequestHandler):
                 providers = config.get("llm", {}).get("providers", {})
                 provider = providers.get(provider_name, {})
                 api_base = str(provider.get("api_base", "")).rstrip("/")
+                api_url = chat_completions_url(api_base)
                 api_key = provider.get("api_key") or os.environ.get(str(provider.get("api_key_env", "")), "")
                 if not api_base:
                     json_response(self, 400, {"ok": False, "error": "当前 provider 缺少 api_base"})
@@ -1108,7 +1160,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not api_key:
                     json_response(self, 400, {"ok": False, "error": "当前 provider 缺少 API Key 或环境变量"})
                     return
-                json_response(self, 200, {"ok": True, "message": f"{provider_name} 配置已具备 api_base 和 API Key。实际生成日报时会进行模型调用。"})
+                stream_note = "；已启用流式响应" if provider.get("stream") else ""
+                json_response(self, 200, {"ok": True, "message": f"{provider_name} 配置已具备 API Base、模型和 API Key{stream_note}。实际请求地址将是：{api_url}"})
                 return
             json_response(self, 404, {"ok": False, "error": "Not found"})
         except Exception as exc:

@@ -38,27 +38,43 @@
     "timeout_seconds": 60,
     "max_output_tokens": 1200,
     "temperature": 0.3,
+    "report_profile": {
+      "style": "简洁、具体、偏行动建议",
+      "structure": "总览、关键观察、时间分布、异常/风险、明日建议",
+      "focus": "深度工作时间、分心内容、上下文切换、和历史日报相比的变化",
+      "must_include": "活跃使用时长、空闲时长、Top 应用/类别、明显异常、最多 3 条建议",
+      "precision_rules": "所有数字必须来自提供的数据；不确定就说明不确定；不要编造没有出现的应用或活动。",
+      "custom_instructions": ""
+    },
     "providers": {
       "openai": {
         "api_base": "https://api.openai.com/v1",
         "model": "gpt-4.1-mini",
-        "api_key_env": "OPENAI_API_KEY"
+        "api_key_env": "OPENAI_API_KEY",
+        "stream": false,
+        "extra_body": {}
       },
       "deepseek": {
         "api_base": "https://api.deepseek.com/v1",
         "model": "deepseek-chat",
-        "api_key_env": "DEEPSEEK_API_KEY"
+        "api_key_env": "DEEPSEEK_API_KEY",
+        "stream": false,
+        "extra_body": {}
       },
       "qwen": {
         "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "model": "qwen-plus",
-        "api_key_env": "DASHSCOPE_API_KEY"
+        "api_key_env": "DASHSCOPE_API_KEY",
+        "stream": false,
+        "extra_body": {}
       },
       "ollama": {
         "api_base": "http://127.0.0.1:11434/v1",
         "model": "qwen2.5:7b",
         "api_key_env": "OLLAMA_API_KEY",
-        "api_key": "ollama"
+        "api_key": "ollama",
+        "stream": false,
+        "extra_body": {}
       }
     }
   },

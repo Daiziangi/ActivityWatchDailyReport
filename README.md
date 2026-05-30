@@ -120,6 +120,13 @@ python .\activity_daily_report.py --date today --llm on --provider deepseek
 
 在 Web 控制台中启用后，默认 `--llm auto` 会跟随配置。
 
+LLM 的使用方式是：
+
+1. 本地脚本先从 ActivityWatch 计算确定性的当天统计，包括活跃时长、空闲时长、应用排行、类别排行、窗口标题和小时分布。
+2. 如果启用 LLM，脚本会把“当天结构化统计”、最近历史日报和你的“日报生成偏好”发送给 provider。
+3. LLM 只生成“大模型增强分析”段落。基础表格和总览数字仍由本地脚本生成。
+4. 提示词会要求模型把当天 `today` 数据作为唯一事实来源，历史日报只用于趋势比较，避免把昨天的时长误写成今天的时长。
+
 内置 provider 示例：
 
 - `openai`
@@ -131,6 +138,16 @@ python .\activity_daily_report.py --date today --llm on --provider deepseek
 - `ollama`
 
 也可以在 Web 控制台新增任何兼容 OpenAI Chat Completions 的服务，例如 SiliconFlow、NVIDIA、OpenAI-compatible 私有代理等。
+
+API Base 可以填写根地址或版本地址：
+
+```text
+https://api.example.com
+https://api.example.com/v1
+https://api.example.com/v1/chat/completions
+```
+
+工具会自动推导最终的 Chat Completions 地址。比如 `https://free.v36.cm` 会请求 `https://free.v36.cm/v1/chat/completions`。
 
 推荐使用环境变量保存 API Key：
 
@@ -145,6 +162,22 @@ $env:DEEPSEEK_API_KEY = "your-api-key"
 - `0-0.3`：更稳定，更适合日报
 - `0.4-0.7`：表达更灵活
 - `0.8+`：更发散，更适合头脑风暴
+
+Web 控制台的“日报生成偏好”可以自定义：
+
+- 写作风格：例如简洁、复盘式、偏行动建议
+- 期望结构：例如总览、关键观察、异常、明日建议
+- 分析重点：例如深度工作、分心内容、上下文切换、历史变化
+- 必须出现的信息：例如活跃时长、空闲时长、Top 应用/类别、异常
+- 精确性规则：例如所有数字必须来自当天数据，不确定就说明不确定
+- 自定义要求：追加你自己的日报格式和分析约束
+
+Provider 高级选项：
+
+- `stream`：启用流式响应解析。有些 OpenAI-compatible 服务在非流式模式下可能返回 `choices: null`，这时可以尝试开启。
+- `extra_body`：追加到 Chat Completions 请求体的 JSON 对象，用于服务商私有参数。比如某些 Qwen/Qwen3 服务可能支持控制思考模式、响应格式或其他兼容参数，请以对应服务商文档为准。
+
+如果 LLM 服务返回空响应、非 JSON、`choices: null` 或网络中断，工具会保留基础日报，并在“大模型增强分析”段落写明原因。常见原因包括 API Base 缺少 `/v1`、模型名不正确、服务商额度不足、网络波动或服务商临时断开连接。
 
 ## Windows 自动化
 
@@ -211,6 +244,7 @@ activity_report_config.example.json
 - `distracting_keywords`：计入可能分心内容的标题关键词
 - `llm.enabled`：是否启用 LLM
 - `llm.providers`：多模型 provider 配置
+- `llm.report_profile`：日报风格、格式、重点和精确性要求
 - `schedule`：Windows 每日任务配置
 
 ## 隐私与安全

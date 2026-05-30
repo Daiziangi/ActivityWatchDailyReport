@@ -9,6 +9,7 @@ standard library so it can run from Task Scheduler without a virtualenv.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import math
 import os
@@ -60,42 +61,64 @@ DEFAULT_CONFIG = {
         "timeout_seconds": 60,
         "max_output_tokens": 1200,
         "temperature": 0.3,
+        "report_profile": {
+            "style": "简洁、具体、偏行动建议",
+            "structure": "总览、关键观察、时间分布、异常/风险、明日建议",
+            "focus": "深度工作时间、分心内容、上下文切换、和历史日报相比的变化",
+            "must_include": "活跃使用时长、空闲时长、Top 应用/类别、明显异常、最多 3 条建议",
+            "precision_rules": "所有数字必须来自提供的数据；不确定就说明不确定；不要编造没有出现的应用或活动。",
+            "custom_instructions": ""
+        },
         "providers": {
             "openai": {
                 "api_base": "https://api.openai.com/v1",
                 "api_key_env": "OPENAI_API_KEY",
-                "model": "gpt-4.1-mini"
+                "model": "gpt-4.1-mini",
+                "stream": False,
+                "extra_body": {}
             },
             "deepseek": {
                 "api_base": "https://api.deepseek.com/v1",
                 "api_key_env": "DEEPSEEK_API_KEY",
-                "model": "deepseek-chat"
+                "model": "deepseek-chat",
+                "stream": False,
+                "extra_body": {}
             },
             "qwen": {
                 "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
                 "api_key_env": "DASHSCOPE_API_KEY",
-                "model": "qwen-plus"
+                "model": "qwen-plus",
+                "stream": False,
+                "extra_body": {}
             },
             "zhipu": {
                 "api_base": "https://open.bigmodel.cn/api/paas/v4",
                 "api_key_env": "ZHIPU_API_KEY",
-                "model": "glm-4-flash"
+                "model": "glm-4-flash",
+                "stream": False,
+                "extra_body": {}
             },
             "moonshot": {
                 "api_base": "https://api.moonshot.cn/v1",
                 "api_key_env": "MOONSHOT_API_KEY",
-                "model": "moonshot-v1-8k"
+                "model": "moonshot-v1-8k",
+                "stream": False,
+                "extra_body": {}
             },
             "openrouter": {
                 "api_base": "https://openrouter.ai/api/v1",
                 "api_key_env": "OPENROUTER_API_KEY",
-                "model": "openai/gpt-4.1-mini"
+                "model": "openai/gpt-4.1-mini",
+                "stream": False,
+                "extra_body": {}
             },
             "ollama": {
                 "api_base": "http://127.0.0.1:11434/v1",
                 "api_key_env": "OLLAMA_API_KEY",
                 "api_key": "ollama",
-                "model": "qwen2.5:7b"
+                "model": "qwen2.5:7b",
+                "stream": False,
+                "extra_body": {}
             }
         }
     },
@@ -438,6 +461,74 @@ def should_use_llm(config: Dict[str, Any], mode: str) -> bool:
     return bool(config.get("llm", {}).get("enabled", False))
 
 
+def coerce_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
+def provider_extra_body(provider: Dict[str, Any], provider_name: str) -> Dict[str, Any]:
+    extra = provider.get("extra_body", {})
+    if extra in (None, ""):
+        return {}
+    if isinstance(extra, dict):
+        return dict(extra)
+    if isinstance(extra, str):
+        try:
+            parsed = json.loads(extra)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"LLM provider '{provider_name}' extra_body is not valid JSON: {exc}")
+        if not isinstance(parsed, dict):
+            raise SystemExit(f"LLM provider '{provider_name}' extra_body must be a JSON object.")
+        return parsed
+    raise SystemExit(f"LLM provider '{provider_name}' extra_body must be an object or JSON object string.")
+
+
+def call_llm_chat(
+    api_url: str,
+    api_key: str,
+    body: Dict[str, Any],
+    provider_name: str,
+    timeout_seconds: int,
+) -> str:
+    req = urllib.request.Request(
+        api_url,
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "text/event-stream, application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+            raw_body = resp.read().decode("utf-8", errors="replace")
+            content_type = resp.headers.get("Content-Type", "")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise SystemExit(
+            f"LLM provider '{provider_name}' returned HTTP {exc.code} at {api_url}: "
+            f"{truncate(detail)}"
+        )
+    except (urllib.error.URLError, http.client.RemoteDisconnected, TimeoutError, ConnectionError) as exc:
+        raise SystemExit(
+            f"Cannot call LLM provider '{provider_name}' at {api_url}: {type(exc).__name__}: {exc}. "
+            "This is usually a network/provider-side interruption. Retry later or increase timeout_seconds."
+        )
+
+    if "text/event-stream" in content_type.lower() or raw_body.lstrip().startswith("data:"):
+        return parse_sse_content(raw_body, provider_name, api_url)
+    data = parse_llm_json(raw_body, provider_name, api_url, content_type)
+    return extract_llm_content(data, provider_name, api_url)
+
+
 def make_llm_summary(
     report_day: date,
     stats: Dict[str, Any],
@@ -448,6 +539,7 @@ def make_llm_summary(
     llm_config = config.get("llm", {})
     name, provider = resolve_llm_provider(config, provider_name)
     api_base = str(provider.get("api_base", "")).rstrip("/")
+    api_url = chat_completions_url(api_base)
     model = str(provider.get("model", ""))
     api_key = str(provider.get("api_key") or os.environ.get(str(provider.get("api_key_env", "")), ""))
     if not api_base or not model:
@@ -457,6 +549,7 @@ def make_llm_summary(
         raise SystemExit(f"LLM provider '{name}' needs an API key. Set environment variable {env_name}, or add api_key in config.")
 
     history = load_history_reports(output_dir, report_day, int(llm_config.get("history_days", 7)))
+    report_profile = llm_config.get("report_profile", {})
     payload = {
         "today": stats_payload(report_day, stats, config),
         "history_reports": history,
@@ -465,19 +558,37 @@ def make_llm_summary(
             "focus_apps": config.get("focus_apps", []),
             "distracting_keywords": config.get("distracting_keywords", []),
             "category_rules": config.get("category_rules", []),
+            "report_profile": report_profile,
         },
     }
+    profile_line = "\n".join(
+        f"- {label}：{report_profile.get(key) or '未指定'}"
+        for key, label in [
+            ("style", "写作风格"),
+            ("structure", "期望结构"),
+            ("focus", "分析重点"),
+            ("must_include", "必须包含"),
+            ("precision_rules", "精确性规则"),
+            ("custom_instructions", "自定义要求"),
+        ]
+    )
     system_prompt = (
-        "你是一个严谨的个人时间审计和复盘助手。你只基于用户提供的 ActivityWatch 统计数据和历史日报写分析，"
-        "不要编造未出现的事情。输出中文 Markdown，语气直接、具体、有帮助。"
+        "你是一个严谨的个人时间审计和复盘助手。你只基于用户提供的 ActivityWatch 统计数据和历史日报写分析。"
+        "当天结构化数据 today 是本日报所有数字和事实的唯一事实来源；history_reports 只能用于趋势比较，"
+        "绝不能把历史日报的时长、应用、类别或结论当成今天发生的事实。不要编造未出现的事情。"
+        "如果当天活跃使用时间很短或数据不足，要明确说明样本不足，而不是用历史数据补齐。"
+        "输出中文 Markdown，语气直接、具体、有帮助。"
     )
     user_prompt = (
         "请根据下面的当天结构化数据和历史日报，生成更精确的日报增强总结。\n"
+        "日报生成偏好：\n"
+        f"{profile_line}\n\n"
         "要求：\n"
         "1. 先给 3-5 条关键观察，包含趋势或异常。\n"
         "2. 指出可能的高价值时间、低价值时间和上下文切换问题。\n"
         "3. 给出明天最多 3 条可执行建议。\n"
-        "4. 不要重复完整排行榜，不要输出空泛鸡汤。\n\n"
+        "4. 所有时长、百分比、Top 应用/类别必须来自 today；历史日报只允许以“相比历史/最近几天”表述趋势。\n"
+        "5. 不要重复完整排行榜，不要输出空泛鸡汤。\n\n"
         f"数据 JSON：\n{json.dumps(payload, ensure_ascii=False, indent=2)}"
     )
     body = {
@@ -489,28 +600,135 @@ def make_llm_summary(
         "temperature": float(llm_config.get("temperature", 0.3)),
         "max_tokens": int(llm_config.get("max_output_tokens", 1200)),
     }
-    req = urllib.request.Request(
-        f"{api_base}/chat/completions",
-        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
-    )
+    body.update(provider_extra_body(provider, name))
+    body["stream"] = coerce_bool(provider.get("stream"), False)
+    timeout_seconds = int(llm_config.get("timeout_seconds", 60))
     try:
-        with urllib.request.urlopen(req, timeout=int(llm_config.get("timeout_seconds", 60))) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise SystemExit(f"LLM provider '{name}' returned HTTP {exc.code}: {detail}")
-    except urllib.error.URLError as exc:
-        raise SystemExit(f"Cannot call LLM provider '{name}' at {api_base}: {exc}")
-    try:
-        content = data["choices"][0]["message"]["content"].strip()
-    except (KeyError, IndexError, TypeError):
-        raise SystemExit(f"Unexpected LLM response from provider '{name}': {data}")
+        content = call_llm_chat(api_url, api_key, body, name, timeout_seconds)
+    except SystemExit as exc:
+        message = str(exc)
+        if "returned no choices" not in message or body.get("stream"):
+            raise
+        retry_body = dict(body)
+        retry_body["stream"] = True
+        try:
+            content = call_llm_chat(api_url, api_key, retry_body, name, timeout_seconds)
+        except SystemExit:
+            raise exc
     return f"由 `{name}` / `{model}` 生成。\n\n{content}"
+
+
+def chat_completions_url(api_base: str) -> str:
+    base = api_base.rstrip("/")
+    if not base:
+        return base
+    parsed = urllib.parse.urlparse(base)
+    path = parsed.path.rstrip("/")
+    if path.endswith("/chat/completions"):
+        return base
+    if path.endswith("/v1") or path.endswith("/v4"):
+        return f"{base}/chat/completions"
+    if not path:
+        return f"{base}/v1/chat/completions"
+    return f"{base}/chat/completions"
+
+
+def parse_llm_json(raw_body: str, provider_name: str, api_url: str, content_type: str) -> Dict[str, Any]:
+    if not raw_body.strip():
+        raise SystemExit(
+            f"LLM provider '{provider_name}' returned an empty response at {api_url}. "
+            "Check whether the API Base should include /v1, and whether the provider is reachable."
+        )
+    try:
+        return json.loads(raw_body)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(
+            f"LLM provider '{provider_name}' returned non-JSON response at {api_url}. "
+            f"Content-Type: {content_type or 'unknown'}. "
+            f"JSON error: {exc}. Response preview: {truncate(raw_body)}"
+        )
+
+
+def content_part_to_text(content: Any) -> str:
+    if isinstance(content, list):
+        pieces = []
+        for part in content:
+            if isinstance(part, dict):
+                pieces.append(str(part.get("text") or part.get("content") or ""))
+            else:
+                pieces.append(str(part))
+        return "".join(pieces)
+    return str(content or "")
+
+
+def parse_sse_content(raw_body: str, provider_name: str, api_url: str) -> str:
+    pieces: List[str] = []
+    seen_events = 0
+    for line in raw_body.splitlines():
+        line = line.strip()
+        if not line or line.startswith(":") or not line.startswith("data:"):
+            continue
+        chunk = line[5:].strip()
+        if chunk == "[DONE]":
+            break
+        seen_events += 1
+        try:
+            data = json.loads(chunk)
+        except json.JSONDecodeError:
+            continue
+        if data.get("error"):
+            raise SystemExit(f"LLM provider '{provider_name}' returned stream error at {api_url}: {truncate(json.dumps(data.get('error'), ensure_ascii=False))}")
+        choices = data.get("choices") or []
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta") or {}
+            message = choice.get("message") or {}
+            text = content_part_to_text(delta.get("content") if "content" in delta else message.get("content"))
+            if text:
+                pieces.append(text)
+    content = "".join(pieces).strip()
+    if content:
+        return content
+    raise SystemExit(
+        f"LLM provider '{provider_name}' returned a stream but no text content at {api_url}. "
+        f"Parsed events: {seen_events}. Response preview: {truncate(raw_body)}"
+    )
+
+
+def extract_llm_content(data: Dict[str, Any], provider_name: str, api_url: str) -> str:
+    if not isinstance(data, dict):
+        raise SystemExit(f"LLM provider '{provider_name}' returned non-object JSON at {api_url}: {truncate(repr(data))}")
+    if data.get("error"):
+        raise SystemExit(f"LLM provider '{provider_name}' returned error at {api_url}: {truncate(json.dumps(data.get('error'), ensure_ascii=False))}")
+    choices = data.get("choices")
+    if not choices:
+        raise SystemExit(
+            f"LLM provider '{provider_name}' returned no choices at {api_url}. "
+            "The request reached the service, but the service did not return a model answer. "
+            "Check model name, API key permissions, quota, provider logs, or try a smaller/different model. "
+            "For ModelScope/Qwen3-style providers, also try enabling provider stream mode or adding provider-specific extra_body options supported by that service. "
+            f"Response preview: {truncate(json.dumps(data, ensure_ascii=False))}"
+        )
+    try:
+        message = choices[0].get("message") or {}
+        content = content_part_to_text(message.get("content")).strip()
+    except (AttributeError, IndexError, TypeError) as exc:
+        raise SystemExit(
+            f"LLM provider '{provider_name}' returned unsupported choices shape at {api_url}: "
+            f"{type(exc).__name__}: {exc}. Response preview: {truncate(json.dumps(data, ensure_ascii=False))}"
+        )
+    if not content:
+        raise SystemExit(
+            f"LLM provider '{provider_name}' returned an empty message at {api_url}. "
+            f"Response preview: {truncate(json.dumps(data, ensure_ascii=False))}"
+        )
+    return content
+
+
+def truncate(text: str, limit: int = 700) -> str:
+    text = (text or "").replace("\r", "\\r").replace("\n", "\\n")
+    return text if len(text) <= limit else text[:limit] + "...(truncated)"
 
 
 def make_insights(stats: Dict[str, Any], config: Dict[str, Any]) -> List[str]:
